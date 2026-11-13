@@ -1,57 +1,3 @@
-#COLOCANDO TUDO NO GIT HUB
-repo <- "~/herbario-db"
-
-
-git_config_global_set("user.name",  "thiago-design")
-git_config_global_set("user.email", "thiagojcsgyn@gmail.com")
-
-
-# 2. Colocar o CSV na pasta que o app espera
-dir.create(file.path(repo, "dados"), showWarnings = FALSE)
-file.copy("C:/Users/herbario-db/herbario.csv",
-          file.path(repo, "dados", "herbario.csv"))
-
-# 3. Primeiro commit
-git_add("dados/herbario.csv", repo = repo)
-git_commit("Adiciona o banco de dados do herbário", repo = repo)
-
-# 4. Garantir que a branch se chama "main" e enviar para o GitHub
-if (git_branch(repo = repo) != "main") {
-  git_branch_move(git_branch(repo = repo), "main", repo = repo)
-}
-git_push(remote = "origin", set_upstream = TRUE, repo = repo)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 library(shiny)
 library(gert)
 library(readr)
@@ -64,19 +10,23 @@ library(uuid)
 # Configurações
 # ------------------------------------------------------------------------------
 
-repo_path        <- "~/herbario-db"
-csv_path         <- file.path(repo_path, "dados", "herbario.csv")
+repo_path        <- "C:/Users/PC/Documents/GitHub/reposit-rio-teste"
+csv_nome         <- "herbario.csv"   # nome do arquivo, na raiz do repositório
+csv_path         <- file.path(repo_path, csv_nome)
 branch_principal <- "main"   # troque para "master" se for o caso do seu repositório
 
-# Base local de nomes do Kew (WCVP), gerada pelo script atualizar_wcvp.R
-wcvp_path <- "~/herbario-db/wcvp_lookup.rds"
+# Base local de nomes do Kew (WCVP), gerada pelo script atualizar_wcvp.R.
+# Fica dentro da pasta do repositório: na raiz ou numa subpasta "wcvp".
+wcvp_candidatos <- c(file.path(repo_path, "wcvp_lookup.rds"),
+                     file.path(repo_path, "wcvp", "wcvp_lookup.rds"))
+wcvp_path <- c(wcvp_candidatos[file.exists(wcvp_candidatos)], wcvp_candidatos[1])[1]
 
 # ------------------------------------------------------------------------------
 # Conferência do nome científico na base local do Kew (WCVP)
 # ------------------------------------------------------------------------------
 
 if (!file.exists(wcvp_path)) {
-  stop("Base de nomes do Kew não encontrada em ", path.expand(wcvp_path),
+  stop("Base de nomes do Kew (wcvp_lookup.rds) não encontrada em ", repo_path,
        ".\nRode o script atualizar_wcvp.R antes de abrir o app.", call. = FALSE)
 }
 
@@ -335,7 +285,7 @@ server <- function(input, output, session) {
       
       # --- 8. Commit + push (branch própria, para revisão via PR) ---------
       etapa <- "commit"
-      git_add(files = file.path("dados", "herbario.csv"), repo = repo_path)
+      git_add(files = csv_nome, repo = repo_path)
       git_commit(
         message = paste("Adiciona registro", catalog_number, "-", nome_cientifico),
         repo = repo_path
