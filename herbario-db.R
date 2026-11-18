@@ -290,17 +290,70 @@ ui <- fluidPage(
   
   sidebarLayout(
     sidebarPanel(
-      textInput("barcode", "Número de tombo*", placeholder = tombo_exemplo),
-      textInput("scientificName", "Nome científico*", placeholder = "Cattleya walkeriana"),
-      textInput("collector", "Coletor(a)*"),
-      dateInput("eventDate", "Data de coleta*", value = Sys.Date(), format = "dd/mm/yyyy",
-                language = "pt-BR"),
-      textInput("country", "País", value = "Brasil"),
-      textInput("majorarea", "Estado"),
-      textInput("minorarea", "Município"),
-      textInput("gazetteer", "Localidade"),
-      numericInput("lat", "Latitude (decimal, negativa no hemisfério sul)", value = NA),
-      numericInput("long", "Longitude (decimal, negativa a oeste)", value = NA),
+      tabsetPanel(
+        id = "abas",
+        
+        # --- Coleta ---------------------------------------------------------
+        tabPanel(
+          "Coleta",
+          tags$br(),
+          textInput("barcode", "Número de tombo*", placeholder = tombo_exemplo),
+          textInput("collector", "Coletor(a)*"),
+          textInput("addcoll", "Coletores adicionais"),
+          textInput("number", "Número de coleta"),
+          dateInput("eventDate", "Data de coleta*", value = Sys.Date(),
+                    format = "dd/mm/yyyy", language = "pt-BR")
+        ),
+        
+        # --- Táxon e determinação -------------------------------------------
+        tabPanel(
+          "Táxon",
+          tags$br(),
+          textInput("scientificName", "Nome científico*",
+                    placeholder = "Cattleya walkeriana"),
+          textInput("detby", "Determinador(a)"),
+          tags$label("Data de determinação (pode ser parcial, ex.: só o ano)"),
+          fluidRow(
+            column(4, numericInput("detdd", "Dia", value = NA, min = 1, max = 31)),
+            column(4, numericInput("detmm", "Mês", value = NA, min = 1, max = 12)),
+            column(4, numericInput("detyy", "Ano", value = NA))
+          )
+        ),
+        
+        # --- Local ----------------------------------------------------------
+        tabPanel(
+          "Local",
+          tags$br(),
+          textInput("country", "País", value = "Brasil"),
+          textInput("majorarea", "Estado"),
+          textInput("minorarea", "Município"),
+          textInput("gazetteer", "Localidade"),
+          textAreaInput("locality_notes", "Observações da localidade", rows = 2),
+          textAreaInput("habitat", "Habitat / descrição do local", rows = 2),
+          numericInput("lat", "Latitude (decimal, negativa no hemisfério sul)", value = NA),
+          numericInput("long", "Longitude (decimal, negativa a oeste)", value = NA),
+          fluidRow(
+            column(6, textInput("llorig", "Origem das coordenadas", value = "SPSC")),
+            column(6, selectInput("lldatum", "Datum",
+                                  choices = c("WGS84", "SIRGAS2000", "SAD69",
+                                              "Córrego Alegre"),
+                                  selected = "WGS84"))
+          ),
+          numericInput("alt", "Altitude (m)", value = NA)
+        ),
+        
+        # --- Planta e controle ----------------------------------------------
+        tabPanel(
+          "Planta",
+          tags$br(),
+          textAreaInput("plant_description", "Descrição da planta", rows = 3,
+                        placeholder = "Hábito, altura, cor das flores, frutos..."),
+          textInput("vernacular", "Nome popular"),
+          selectizeInput("tag", "Situação do registro (tag)",
+                         choices = c("(em branco)" = "", "reg.ok"),
+                         options = list(create = TRUE))
+        )
+      ),
       tags$hr(),
       actionButton("submit", "Cadastrar registro", class = "btn-primary"),
       tags$p(tags$small("* campos obrigatórios")),
@@ -378,6 +431,52 @@ server <- function(input, output, session) {
       return(invisible(NULL))
     }
     
+    alt <- input$alt
+    if (!is.na(alt) && (alt < -500 || alt > 9000)) {
+      status_msg("Erro: altitude fora do intervalo esperado (-500 a 9000 m).")
+      return(invisible(NULL))
+    }
+    
+    # Data de determinação: pode ser parcial (só ano, ou mês e ano)
+    detdd <- input$detdd
+    detmm <- input$detmm
+    detyy <- input$detyy
+    ano_atual   <- as.integer(format(Sys.Date(), "%Y"))
+    data_coleta <- as.Date(input$eventDate)
+    
+    if (!is.na(detdd) && (is.na(detmm) || is.na(detyy))) {
+      status_msg("Erro: data de determinação com dia precisa ter também mês e ano.")
+      return(invisible(NULL))
+    }
+    if (!is.na(detmm) && is.na(detyy)) {
+      status_msg("Erro: data de determinação com mês precisa ter também o ano.")
+      return(invisible(NULL))
+    }
+    if (!is.na(detmm) && (detmm < 1 || detmm > 12 || detmm %% 1 != 0)) {
+      status_msg("Erro: mês de determinação deve ser um número de 1 a 12.")
+      return(invisible(NULL))
+    }
+    if (!is.na(detyy) && (detyy < 1700 || detyy > ano_atual || detyy %% 1 != 0)) {
+      status_msg(paste0("Erro: ano de determinação deve estar entre 1700 e ", ano_atual, "."))
+      return(invisible(NULL))
+    }
+    if (!is.na(detdd)) {
+      data_det <- as.Date(sprintf("%04d-%02d-%02d", as.integer(detyy),
+                                  as.integer(detmm), as.integer(detdd)),
+                          optional = TRUE)
+      if (is.na(data_det) || detdd %% 1 != 0) {
+        status_msg("Erro: data de determinação inválida (confira o dia).")
+        return(invisible(NULL))
+      }
+      if (data_det < data_coleta) {
+        status_msg("Erro: a data de determinação é anterior à data de coleta.")
+        return(invisible(NULL))
+      }
+    } else if (!is.na(detyy) && detyy < as.integer(format(data_coleta, "%Y"))) {
+      status_msg("Erro: o ano de determinação é anterior ao ano de coleta.")
+      return(invisible(NULL))
+    }
+    
     # --- 2. Conferir o nome científico na base do Kew (WCVP) --------------
     # Feito antes de mexer no repositório: se o nome não passar, nada é alterado.
     taxon <- consultar_wcvp(input$scientificName)
@@ -444,11 +543,15 @@ server <- function(input, output, session) {
         if (length(do_banco) > 0) familia <- names(which.max(table(do_banco)))
       }
       
-      data_coleta <- as.Date(input$eventDate)
+      num_txt <- function(x) if (is.na(x)) "" else as.character(as.integer(x))
+      tem_coord <- !is.na(lat)
       
       registro <- c(
+        tag       = trimws(input$tag),
         barcode   = tombo,
         collector = trimws(input$collector),
+        addcoll   = trimws(input$addcoll),
+        number    = trimws(input$number),
         colldd    = as.character(as.integer(format(data_coleta, "%d"))),
         collmm    = as.character(as.integer(format(data_coleta, "%m"))),
         collyy    = format(data_coleta, "%Y"),
@@ -459,14 +562,27 @@ server <- function(input, output, session) {
         rank1     = nome[["rank1"]],
         sp2       = nome[["sp2"]],
         author2   = nome[["author2"]],
+        `plant description` = trimws(input$plant_description),
+        detby     = trimws(input$detby),
+        detdd     = num_txt(detdd),
+        detmm     = num_txt(detmm),
+        detyy     = num_txt(detyy),
         country   = trimws(input$country),
         majorarea = trimws(input$majorarea),
         minorarea = trimws(input$minorarea),
         gazetteer = trimws(input$gazetteer),
+        `locality notes` = trimws(input$locality_notes),
+        `habitat/site description` = trimws(input$habitat),
         lat       = if (is.na(lat))  "" else as.character(round(lat, 6)),
         ns        = if (is.na(lat))  "" else if (lat < 0)  "S" else "N",
         long      = if (is.na(long)) "" else as.character(round(long, 6)),
-        ew        = if (is.na(long)) "" else if (long < 0) "W" else "E"
+        ew        = if (is.na(long)) "" else if (long < 0) "W" else "E",
+        # Origem e datum só fazem sentido quando há coordenadas
+        llorig    = if (tem_coord) trimws(input$llorig) else "",
+        lldatum   = if (tem_coord) input$lldatum else "",
+        alt       = if (is.na(alt)) "" else as.character(round(alt)),
+        altunit   = if (is.na(alt)) "" else "m",
+        vernacular = trimws(input$vernacular)
       )
       
       etapa <- "validar com pointblank"
@@ -539,7 +655,8 @@ server <- function(input, output, session) {
         "Abra um pull request no GitHub para revisão e merge."
       ))
       
-      # Limpa o formulário (país fica, porque quase sempre se repete)
+      # Limpa o formulário (país, origem e datum das coordenadas ficam,
+      # porque quase sempre se repetem)
       updateTextInput(session, "barcode", value = "")
       updateTextInput(session, "scientificName", value = "")
       updateTextInput(session, "collector", value = "")
@@ -548,6 +665,19 @@ server <- function(input, output, session) {
       updateTextInput(session, "gazetteer", value = "")
       updateNumericInput(session, "lat", value = NA)
       updateNumericInput(session, "long", value = NA)
+      updateTextInput(session, "addcoll", value = "")
+      updateTextInput(session, "number", value = "")
+      updateTextInput(session, "detby", value = "")
+      updateNumericInput(session, "detdd", value = NA)
+      updateNumericInput(session, "detmm", value = NA)
+      updateNumericInput(session, "detyy", value = NA)
+      updateTextAreaInput(session, "locality_notes", value = "")
+      updateTextAreaInput(session, "habitat", value = "")
+      updateNumericInput(session, "alt", value = NA)
+      updateTextAreaInput(session, "plant_description", value = "")
+      updateTextInput(session, "vernacular", value = "")
+      updateSelectizeInput(session, "tag", selected = "")
+      updateTabsetPanel(session, "abas", selected = "Coleta")
       
     }, error = function(e) {
       status_msg(paste0("Erro inesperado na etapa \"", etapa, "\": ",
@@ -567,9 +697,11 @@ shinyApp(ui, server)
 # ==============================================================================
 # Observações:
 # - O banco está no formato do BRAHMS (separador ";", UTF-8). O app preenche as
-#   colunas barcode, collector, colldd/collmm/collyy, family, genus, sp1,
-#   author1, rank1, sp2, author2, country, majorarea, minorarea, gazetteer,
-#   lat, ns, long, ew. As demais ficam em branco no registro novo.
+#   35 colunas: tag, barcode, collector, addcoll, number, colldd/collmm/collyy,
+#   family, genus, sp1, author1, rank1, sp2, author2, plant description, detby,
+#   detdd/detmm/detyy, country, majorarea, minorarea, gazetteer, locality notes,
+#   habitat/site description, lat, ns, long, ew, llorig, lldatum, alt, altunit,
+#   vernacular. As outras 43 colunas do BRAHMS ficam em branco no registro novo.
 # - Cada cadastro acrescenta uma linha no fim do arquivo; as linhas antigas não
 #   são reescritas.
 # - A conferência de nomes usa uma cópia local da WCVP (World Checklist of
